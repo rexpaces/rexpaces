@@ -1,0 +1,27 @@
+{
+  "name": "rexpaces",
+  "version": "1.0.0",
+  "description": "Process recorded X/Twitter Spaces videos and generate highlight clips",
+  "main": "src/index.js",
+  "bin": {
+    "rexpaces": "./src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test --test-timeout=3600000"
+  },
+  "keywords": [
+    "twitter",
+    "x",
+    "spaces",
+    "video",
+    "highlights",
+    "clips"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@google/generative-ai": "^0.21.0",
+    "commander": "^12.1.0",
+    "fluent-ffmpeg": "^2.1.3"
+  }
+}
