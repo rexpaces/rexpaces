@@ -91,3 +91,9 @@ The tool generates:
 4. Analyze with AI (summarize → extract context → detect highlights)
 5. Map highlights to word timestamps
 6. Generate clips with TikTok-style subtitles
+
+## Built with Claude
+
+This project was developed using [Claude Code](https://claude.ai/claude-code).
+
+![Claude Code Session](2026-02-03-claude-session.gif)
