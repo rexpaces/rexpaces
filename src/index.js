@@ -4,6 +4,7 @@ const { program } = require('commander');
 const path = require('path');
 const { extractAudio, splitAudioIntoChunks } = require('./audio');
 const { transcribeAllChunks } = require('./transcribe');
+const { extractHighlights } = require('./highlights');
 
 program
   .name('rexpaces')
@@ -39,9 +40,11 @@ program
       const transcript = await transcribeAllChunks(chunks, outputDir);
       console.log('Transcription complete. Total segments:', transcript.segments.length);
 
-      // Step 4: Analyze transcript for highlights (TODO)
+      // Step 4: Analyze transcript for highlights
       console.log('\n[4/4] Analyzing transcript for highlights...');
-      // TODO: Use Google Gemini to identify highlights
+      const { context, highlights } = await extractHighlights(transcript, outputDir, chunkDuration);
+      console.log(`Found ${highlights.length} highlights`);
+
       // TODO: Cut video into highlight clips
 
       console.log('\nDone!');
