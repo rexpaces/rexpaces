@@ -191,6 +191,91 @@ function findQuoteInWords(quote, wordIndex, startTime, endTime) {
 }
 
 /**
+ * Expand a highlight to include surrounding segments until minimum duration is reached
+ * @param {object} highlight - Highlight with start/end timestamps
+ * @param {Array} segments - Original transcript segments
+ * @param {number} minDuration - Minimum clip duration in seconds
+ * @returns {object} - Highlight with expanded timestamps and words
+ */
+function expandHighlightWithSegments(highlight, segments, minDuration = 60) {
+  const currentDuration = highlight.end - highlight.start;
+  if (currentDuration >= minDuration) {
+    return highlight;
+  }
+
+  // Find segment indices that overlap with the highlight
+  let startSegmentIdx = -1;
+  let endSegmentIdx = -1;
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    // Check if segment overlaps with highlight
+    if (seg.end >= highlight.start && seg.start <= highlight.end) {
+      if (startSegmentIdx === -1) startSegmentIdx = i;
+      endSegmentIdx = i;
+    }
+  }
+
+  // If no segments found, return original
+  if (startSegmentIdx === -1) {
+    return highlight;
+  }
+
+  // Expand segments until we reach minimum duration
+  let expandedStart = segments[startSegmentIdx].start;
+  let expandedEnd = segments[endSegmentIdx].end;
+
+  while (expandedEnd - expandedStart < minDuration) {
+    const canExpandBackward = startSegmentIdx > 0;
+    const canExpandForward = endSegmentIdx < segments.length - 1;
+
+    if (!canExpandBackward && !canExpandForward) break;
+
+    // Prefer expanding backward (context/setup is usually more important)
+    if (canExpandBackward) {
+      startSegmentIdx--;
+      expandedStart = segments[startSegmentIdx].start;
+    }
+
+    // Check if we've reached the minimum
+    if (expandedEnd - expandedStart >= minDuration) break;
+
+    // Then expand forward
+    if (canExpandForward) {
+      endSegmentIdx++;
+      expandedEnd = segments[endSegmentIdx].end;
+    }
+  }
+
+  // Collect all words from expanded segments
+  const expandedWords = [];
+  for (let i = startSegmentIdx; i <= endSegmentIdx; i++) {
+    const seg = segments[i];
+    if (seg.words && seg.words.length > 0) {
+      seg.words.forEach(w => {
+        expandedWords.push({
+          word: w.word || w.text || '',
+          start: w.start,
+          end: w.end,
+        });
+      });
+    }
+  }
+
+  return {
+    ...highlight,
+    // Preserve original quote boundaries
+    quoteStart: highlight.start,
+    quoteEnd: highlight.end,
+    quoteWords: highlight.words,
+    // Set expanded boundaries
+    start: expandedStart,
+    end: expandedEnd,
+    words: expandedWords,
+  };
+}
+
+/**
  * Map highlight quotes back to transcript timestamps with word-level precision
  * @param {Array} highlights - Highlights with quotes
  * @param {Array} segments - Original transcript segments with word-level timestamps
@@ -251,32 +336,52 @@ function mapHighlightsToTimestamps(highlights, segments) {
  * Main function: Extract highlights from transcript
  * @param {object} transcript - Merged transcript with segments
  * @param {string} outputDir - Directory to save results
- * @param {number} chunkDuration - Chunk duration in seconds
+ * @param {object} options - Options
+ * @param {number} options.chunkDuration - Chunk duration in seconds (default: 300)
+ * @param {number} options.minClipDuration - Minimum clip duration in seconds (default: 60)
  * @returns {Promise<{context: object, highlights: Array}>}
  */
-async function extractHighlights(transcript, outputDir, chunkDuration = 300) {
-  // Group segments into chunks
+async function extractHighlights(transcript, outputDir, options = {}) {
+  const { chunkDuration = 300, minClipDuration = 60 } = options;
+
+  const summariesPath = path.join(outputDir, 'chunk_summaries.json');
+  const contextPath = path.join(outputDir, 'conversation_context.json');
+
+  // Always group segments into chunks (needed for highlight detection)
   console.log('Grouping segments into chunks...');
   const chunks = groupSegmentsIntoChunks(transcript.segments, chunkDuration);
   console.log(`Created ${chunks.length} chunks`);
 
-  // Pass 1: Generate summaries
-  console.log('\n=== Pass 1: Generating chunk summaries ===');
-  const summaries = await generateChunkSummaries(chunks);
+  let summaries;
+  let context;
 
-  // Save summaries
-  const summariesPath = path.join(outputDir, 'chunk_summaries.json');
-  fs.writeFileSync(summariesPath, JSON.stringify(summaries, null, 2));
-  console.log(`Summaries saved to: ${summariesPath}`);
+  // Check if summaries and context already exist
+  if (fs.existsSync(summariesPath) && fs.existsSync(contextPath)) {
+    console.log('\nFound existing chunk_summaries.json and conversation_context.json');
+    console.log('Skipping Pass 1 (summaries) and context extraction...');
 
-  // Extract conversation context
-  console.log('\nExtracting conversation context...');
-  const context = await extractConversationContext(summaries);
+    summaries = JSON.parse(fs.readFileSync(summariesPath, 'utf-8'));
+    context = JSON.parse(fs.readFileSync(contextPath, 'utf-8'));
 
-  // Save context
-  const contextPath = path.join(outputDir, 'conversation_context.json');
-  fs.writeFileSync(contextPath, JSON.stringify(context, null, 2));
-  console.log(`Context saved to: ${contextPath}`);
+    console.log(`Loaded ${summaries.length} chunk summaries`);
+    console.log(`Conversation topic: ${context.topic}`);
+  } else {
+    // Pass 1: Generate summaries
+    console.log('\n=== Pass 1: Generating chunk summaries ===');
+    summaries = await generateChunkSummaries(chunks);
+
+    // Save summaries
+    fs.writeFileSync(summariesPath, JSON.stringify(summaries, null, 2));
+    console.log(`Summaries saved to: ${summariesPath}`);
+
+    // Extract conversation context
+    console.log('\nExtracting conversation context...');
+    context = await extractConversationContext(summaries);
+
+    // Save context
+    fs.writeFileSync(contextPath, JSON.stringify(context, null, 2));
+    console.log(`Context saved to: ${contextPath}`);
+  }
 
   // Pass 2: Detect highlights
   console.log('\n=== Pass 2: Detecting highlights ===');
@@ -285,7 +390,19 @@ async function extractHighlights(transcript, outputDir, chunkDuration = 300) {
 
   // Map highlights to timestamps
   console.log('\nMapping highlights to timestamps...');
-  const highlights = mapHighlightsToTimestamps(rawHighlights, transcript.segments);
+  const mappedHighlights = mapHighlightsToTimestamps(rawHighlights, transcript.segments);
+
+  // Expand highlights to minimum duration
+  console.log(`\nExpanding highlights to minimum ${minClipDuration}s duration...`);
+  const highlights = mappedHighlights.map(h => {
+    const expanded = expandHighlightWithSegments(h, transcript.segments, minClipDuration);
+    const originalDuration = (h.end - h.start).toFixed(1);
+    const expandedDuration = (expanded.end - expanded.start).toFixed(1);
+    if (originalDuration !== expandedDuration) {
+      console.log(`  "${h.quote.substring(0, 30)}..." ${originalDuration}s -> ${expandedDuration}s`);
+    }
+    return expanded;
+  });
 
   // Save highlights
   const highlightsPath = path.join(outputDir, 'highlights.json');
@@ -301,6 +418,7 @@ module.exports = {
   detectAllHighlights,
   buildWordIndex,
   findQuoteInWords,
+  expandHighlightWithSegments,
   mapHighlightsToTimestamps,
   extractHighlights,
 };

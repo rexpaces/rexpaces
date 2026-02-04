@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { extractAudio, splitAudioIntoChunks } = require('./audio');
 const { transcribeAllChunks } = require('./transcribe');
-const { extractHighlights, mapHighlightsToTimestamps } = require('./highlights');
+const { extractHighlights } = require('./highlights');
 const { createAllHighlightClips } = require('./clips');
 
 /**
@@ -61,11 +61,13 @@ program
   .argument('<video>', 'path to the input video file')
   .option('-o, --output <dir>', 'output directory for clips', './output')
   .option('-c, --chunk-duration <seconds>', 'chunk duration in seconds', '300')
+  .option('-m, --min-clip-duration <seconds>', 'minimum clip duration in seconds', '60')
   .action(async (video, options) => {
     const videoPath = path.resolve(video);
     const outputDir = path.resolve(options.output);
     const clipsDir = path.join(outputDir, 'clips');
     const chunkDuration = parseInt(options.chunkDuration, 10);
+    const minClipDuration = parseInt(options.minClipDuration, 10);
 
     // Validate environment and input
     validateEnvironment();
@@ -75,6 +77,7 @@ program
     console.log('Input video:', videoPath);
     console.log('Output directory:', outputDir);
     console.log('Chunk duration:', chunkDuration, 'seconds');
+    console.log('Min clip duration:', minClipDuration, 'seconds');
 
     try {
       const transcriptPath = path.join(outputDir, 'transcript.json');
@@ -82,61 +85,46 @@ program
 
       // Check if transcript already exists
       if (fs.existsSync(transcriptPath)) {
-        console.log('\n[1-3/6] Skipping audio extraction, splitting, and transcription (transcript.json found)');
+        console.log('\n[1-3/5] Skipping audio extraction, splitting, and transcription (transcript.json found)');
         transcript = JSON.parse(fs.readFileSync(transcriptPath, 'utf-8'));
         console.log('Loaded existing transcript. Total segments:', transcript.segments.length);
       } else {
         // Step 1: Extract audio from video
-        console.log('\n[1/6] Extracting audio from video...');
+        console.log('\n[1/5] Extracting audio from video...');
         const audioPath = await extractAudio(videoPath, outputDir);
         console.log('Audio extracted:', audioPath);
 
         // Step 2: Split audio into chunks
-        console.log('\n[2/6] Splitting audio into chunks...');
+        console.log('\n[2/5] Splitting audio into chunks...');
         const chunks = await splitAudioIntoChunks(audioPath, outputDir, chunkDuration);
         console.log(`Created ${chunks.length} chunks`);
 
         // Step 3: Transcribe chunks with Whisper
-        console.log('\n[3/6] Transcribing audio chunks...');
+        console.log('\n[3/5] Transcribing audio chunks...');
         transcript = await transcribeAllChunks(chunks, outputDir);
         console.log('Transcription complete. Total segments:', transcript.segments.length);
       }
 
-      // Step 4: Analyze transcript for highlights with Gemini
-      console.log('\n[4/6] Analyzing transcript for highlights...');
-      const { context, highlights: rawHighlights } = await extractHighlights(
+      // Step 4: Analyze transcript and extract highlights
+      console.log('\n[4/5] Analyzing transcript for highlights...');
+      const { context, highlights } = await extractHighlights(
         transcript,
         outputDir,
-        chunkDuration
+        { chunkDuration, minClipDuration }
       );
       console.log('Conversation topic:', context.topic);
-      console.log(`Found ${rawHighlights.length} potential highlights`);
-
-      if (rawHighlights.length === 0) {
-        console.log('\nNo highlights found. Exiting.');
-        process.exit(0);
-      }
-
-      // Step 5: Map highlights to word-level timestamps
-      console.log('\n[5/6] Mapping highlights to timestamps...');
-      const highlights = mapHighlightsToTimestamps(rawHighlights, transcript.segments);
 
       // Filter out highlights with poor match scores
       const validHighlights = highlights.filter(h => h.matchScore >= 0.5);
-      console.log(`Valid highlights with timestamps: ${validHighlights.length}`);
+      console.log(`Valid highlights: ${validHighlights.length}`);
 
       if (validHighlights.length === 0) {
-        console.log('\nNo valid highlights could be mapped to timestamps. Exiting.');
+        console.log('\nNo valid highlights found. Exiting.');
         process.exit(0);
       }
 
-      // Save highlights
-      const highlightsPath = path.join(outputDir, 'highlights.json');
-      fs.writeFileSync(highlightsPath, JSON.stringify(validHighlights, null, 2));
-      console.log('Highlights saved to:', highlightsPath);
-
-      // Step 6: Create video clips with subtitles
-      console.log('\n[6/6] Creating video clips with subtitles...');
+      // Step 5: Create video clips with subtitles
+      console.log('\n[5/5] Creating video clips with subtitles...');
       const clipPaths = await createAllHighlightClips(videoPath, validHighlights, clipsDir);
 
       // Summary
