@@ -5,6 +5,7 @@
 **Key Challenges:** Implementing a "sliding window" chunking strategy for 1hr+ audio files to ensure Whisper API stability and word-level timestamp accuracy.
 
 **Outcome:** A functional pipeline that extracts audio, transcribes via local HTTP API, and uses Gemini 2.0 Flash for semantic clipping.
+
 ---
 
 ╭─── Claude Code v2.1.30 ──────────────────────────────────────────────────────╮
