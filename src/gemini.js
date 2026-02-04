@@ -3,22 +3,67 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-const RATE_LIMIT_DELAY_MS = 2000;
-let lastCallTime = 0;
+// Queue to ensure only one request at a time
+let requestQueue = Promise.resolve();
 
 /**
- * Wait to respect rate limiting
+ * Parse rate limit wait time from error message
+ * Looks for patterns like "Please retry in 58.384186637s"
+ * @param {string} errorMessage - The error message from Gemini
+ * @returns {number|null} - Wait time in milliseconds, or null if not a rate limit error
  */
-async function waitForRateLimit() {
-  const now = Date.now();
-  const timeSinceLastCall = now - lastCallTime;
-
-  if (timeSinceLastCall < RATE_LIMIT_DELAY_MS) {
-    const waitTime = RATE_LIMIT_DELAY_MS - timeSinceLastCall;
-    await new Promise(resolve => setTimeout(resolve, waitTime));
+function parseRateLimitWaitTime(errorMessage) {
+  const match = errorMessage.match(/retry in (\d+(?:\.\d+)?)s/i);
+  if (match) {
+    return Math.ceil(parseFloat(match[1]) * 1000);
   }
+  return null;
+}
 
-  lastCallTime = Date.now();
+/**
+ * Execute a Gemini request with retry logic for rate limits
+ * @param {Function} requestFn - Async function that performs the Gemini request
+ * @param {number} retryCount - Current retry attempt (starts at 0)
+ * @returns {Promise<any>} - The result from Gemini
+ */
+async function executeWithRetry(requestFn, retryCount = 0) {
+  try {
+    return await requestFn();
+  } catch (error) {
+    const errorMessage = error.message || String(error);
+    const waitTimeMs = parseRateLimitWaitTime(errorMessage);
+
+    if (waitTimeMs !== null) {
+      // Add 1 minute per retry to the wait time
+      const extraWaitMs = retryCount * 60 * 1000;
+      const totalWaitMs = waitTimeMs + extraWaitMs;
+      const totalWaitSec = (totalWaitMs / 1000).toFixed(1);
+
+      console.log(`Rate limit hit. Waiting ${totalWaitSec}s (retry #${retryCount + 1})...`);
+      await new Promise(resolve => setTimeout(resolve, totalWaitMs));
+
+      return executeWithRetry(requestFn, retryCount + 1);
+    }
+
+    // Not a rate limit error, rethrow
+    throw error;
+  }
+}
+
+/**
+ * Queue a request to ensure sequential execution (no parallel requests)
+ * @param {Function} requestFn - Async function that performs the Gemini request
+ * @returns {Promise<any>} - The result from Gemini
+ */
+function queueRequest(requestFn) {
+  const previousQueue = requestQueue;
+
+  requestQueue = (async () => {
+    await previousQueue;
+    return executeWithRetry(requestFn);
+  })();
+
+  return requestQueue;
 }
 
 /**
@@ -39,8 +84,6 @@ function formatTime(seconds) {
  * @returns {Promise<string>} - 1-2 sentence summary
  */
 async function summarizeChunk(chunkText, chunkIndex, startTime, endTime) {
-  await waitForRateLimit();
-
   const prompt = `You are summarizing a segment of a conversation from a Twitter/X Space.
 
 SEGMENT ${chunkIndex + 1} (${formatTime(startTime)} - ${formatTime(endTime)}):
@@ -50,9 +93,11 @@ Provide a 1-2 sentence summary of what is discussed in this segment. Focus on th
 
 Summary:`;
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  return response.text().trim();
+  return queueRequest(async () => {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    return response.text().trim();
+  });
 }
 
 /**
@@ -61,8 +106,6 @@ Summary:`;
  * @returns {Promise<{topic: string, participants: string[], keyPoints: string[], narrative: string}>}
  */
 async function extractConversationContext(chunkSummaries) {
-  await waitForRateLimit();
-
   const summariesText = chunkSummaries
     .map(s => `[${formatTime(s.startTime)} - ${formatTime(s.endTime)}]: ${s.summary}`)
     .join('\n');
@@ -83,17 +126,19 @@ Based on these summaries, extract the following information about the overall co
 
 JSON:`;
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  const text = response.text().trim();
+  return queueRequest(async () => {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
 
-  // Parse JSON from response, handling potential markdown code blocks
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (!jsonMatch) {
-    throw new Error('Failed to parse conversation context JSON');
-  }
+    // Parse JSON from response, handling potential markdown code blocks
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) {
+      throw new Error('Failed to parse conversation context JSON');
+    }
 
-  return JSON.parse(jsonMatch[0]);
+    return JSON.parse(jsonMatch[0]);
+  });
 }
 
 /**
@@ -105,8 +150,6 @@ JSON:`;
  * @returns {Promise<Array<{quote: string, reason: string}>>}
  */
 async function detectHighlights(chunkText, startTime, endTime, conversationContext) {
-  await waitForRateLimit();
-
   const prompt = `You are identifying highlight-worthy moments from a Twitter/X Space conversation for creating short video clips.
 
 CONVERSATION CONTEXT:
@@ -137,21 +180,23 @@ Respond in JSON format only, no additional text. If no highlights are found, ret
 
 JSON:`;
 
-  const result = await model.generateContent(prompt);
-  const response = await result.response;
-  const text = response.text().trim();
+  return queueRequest(async () => {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text().trim();
 
-  // Parse JSON from response, handling potential markdown code blocks
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) {
-    return [];
-  }
+    // Parse JSON from response, handling potential markdown code blocks
+    const jsonMatch = text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) {
+      return [];
+    }
 
-  try {
-    return JSON.parse(jsonMatch[0]);
-  } catch {
-    return [];
-  }
+    try {
+      return JSON.parse(jsonMatch[0]);
+    } catch {
+      return [];
+    }
+  });
 }
 
 module.exports = {

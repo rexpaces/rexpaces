@@ -67,20 +67,30 @@ program
     console.log('Chunk duration:', chunkDuration, 'seconds');
 
     try {
-      // Step 1: Extract audio from video
-      console.log('\n[1/6] Extracting audio from video...');
-      const audioPath = await extractAudio(videoPath, outputDir);
-      console.log('Audio extracted:', audioPath);
+      const transcriptPath = path.join(outputDir, 'transcript.json');
+      let transcript;
 
-      // Step 2: Split audio into chunks
-      console.log('\n[2/6] Splitting audio into chunks...');
-      const chunks = await splitAudioIntoChunks(audioPath, outputDir, chunkDuration);
-      console.log(`Created ${chunks.length} chunks`);
+      // Check if transcript already exists
+      if (fs.existsSync(transcriptPath)) {
+        console.log('\n[1-3/6] Skipping audio extraction, splitting, and transcription (transcript.json found)');
+        transcript = JSON.parse(fs.readFileSync(transcriptPath, 'utf-8'));
+        console.log('Loaded existing transcript. Total segments:', transcript.segments.length);
+      } else {
+        // Step 1: Extract audio from video
+        console.log('\n[1/6] Extracting audio from video...');
+        const audioPath = await extractAudio(videoPath, outputDir);
+        console.log('Audio extracted:', audioPath);
 
-      // Step 3: Transcribe chunks with Whisper
-      console.log('\n[3/6] Transcribing audio chunks...');
-      const transcript = await transcribeAllChunks(chunks, outputDir);
-      console.log('Transcription complete. Total segments:', transcript.segments.length);
+        // Step 2: Split audio into chunks
+        console.log('\n[2/6] Splitting audio into chunks...');
+        const chunks = await splitAudioIntoChunks(audioPath, outputDir, chunkDuration);
+        console.log(`Created ${chunks.length} chunks`);
+
+        // Step 3: Transcribe chunks with Whisper
+        console.log('\n[3/6] Transcribing audio chunks...');
+        transcript = await transcribeAllChunks(chunks, outputDir);
+        console.log('Transcription complete. Total segments:', transcript.segments.length);
+      }
 
       // Step 4: Analyze transcript for highlights with Gemini
       console.log('\n[4/6] Analyzing transcript for highlights...');
@@ -132,6 +142,7 @@ program
       console.log(`\nOutput directory: ${clipsDir}`);
       console.log('\nDone!');
     } catch (error) {
+      clearDirectory(outputDir);
       console.error('\n=== Error ===');
       console.error('Message:', error.message);
 
@@ -159,3 +170,28 @@ program
   });
 
 program.parse();
+
+
+function clearDirectory(dirPath, callback) {
+  fs.readdir(dirPath, { withFileTypes: true }, (err, entries) => {
+    if (err) return callback(err);
+
+    let pending = entries.length;
+    if (!pending) return callback(null);
+
+    entries.forEach(entry => {
+      const fullPath = path.join(dirPath, entry.name);
+
+      if (entry.isDirectory()) {
+        fs.rm(fullPath, { recursive: true, force: true }, done);
+      } else {
+        fs.unlink(fullPath, done);
+      }
+    });
+
+    function done(err) {
+      if (err) return callback(err);
+      if (!--pending) callback(null);
+    }
+  });
+}
