@@ -13,9 +13,16 @@ const { createAllHighlightClips } = require('./clips');
  */
 function validateEnvironment() {
   const errors = [];
+  const aiProvider = process.env.AI_PROVIDER || 'ollama';
 
-  if (!process.env.GEMINI_API_KEY) {
-    errors.push('GEMINI_API_KEY environment variable is required');
+  if (aiProvider === 'gemini' && !process.env.GEMINI_API_KEY) {
+    errors.push('GEMINI_API_KEY environment variable is required when using Gemini provider');
+  }
+
+  if (aiProvider === 'ollama') {
+    console.log('Using Ollama provider');
+    console.log('  Endpoint:', process.env.OLLAMA_API_URL || 'http://localhost:11434');
+    console.log('  Model:', process.env.OLLAMA_MODEL || 'gemma3:12b');
   }
 
   if (!process.env.WHISPER_API_URL) {
@@ -25,9 +32,12 @@ function validateEnvironment() {
   if (errors.length > 0) {
     console.error('Environment configuration errors:');
     errors.forEach(e => console.error(`  - ${e}`));
-    console.error('\nRequired environment variables:');
-    console.error('  GEMINI_API_KEY  - Google Gemini API key');
-    console.error('  WHISPER_API_URL - Whisper API endpoint (optional, default: http://localhost:9000)');
+    console.error('\nEnvironment variables:');
+    console.error('  AI_PROVIDER     - AI provider: "gemini" (default) or "ollama"');
+    console.error('  GEMINI_API_KEY  - Google Gemini API key (required for Gemini)');
+    console.error('  OLLAMA_API_URL  - Ollama API endpoint (default: http://localhost:11434)');
+    console.error('  OLLAMA_MODEL    - Ollama model name (default: gemma3:12b)');
+    console.error('  WHISPER_API_URL - Whisper API endpoint (default: http://localhost:9000)');
     process.exit(1);
   }
 }
@@ -154,6 +164,11 @@ program
         console.error('\nGemini API error. Check that:');
         console.error('  - GEMINI_API_KEY is valid');
         console.error('  - You have API quota available');
+      } else if (error.message.includes('Ollama')) {
+        console.error('\nOllama API error. Check that:');
+        console.error('  - Ollama server is running');
+        console.error('  - OLLAMA_API_URL is correct');
+        console.error('  - The model is available (run: ollama pull gemma3:12b)');
       } else if (error.message.includes('ffmpeg') || error.message.includes('FFmpeg')) {
         console.error('\nFFmpeg error. Check that:');
         console.error('  - FFmpeg is installed');

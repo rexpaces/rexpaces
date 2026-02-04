@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { summarizeChunk, extractConversationContext, detectHighlights } = require('./gemini');
+const { summarizeChunk, extractConversationContext, detectHighlights } = require('./ai');
 
 /**
  * Group transcript segments into chunks by time
