@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const WHISPER_API_URL = 'http://192.168.2.8:9000';
+const WHISPER_API_URL = process.env.WHISPER_API_URL || 'http://localhost:9000';
 
 /**
  * Transcribe a single audio chunk using Whisper HTTP API
